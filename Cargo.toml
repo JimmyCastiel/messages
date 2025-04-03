@@ -1,0 +1,10 @@
+[package]
+name = "messages"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+env = "1.0.1"
+rdkafka = "0.37.0"
+rocket = { version = "0.5.1", features = [ "json" ] }
+uuid7 = "1.1.0"
