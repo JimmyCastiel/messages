@@ -8,4 +8,6 @@ env = "1.0.1"
 openidconnect = "4.0.0"
 rdkafka = "0.37.0"
 rocket = { version = "0.5.1", features = [ "json" ] }
+thiserror = "2.0.12"
+tokio = "1.44.1"
 uuid7 = "1.1.0"
