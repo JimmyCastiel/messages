@@ -1,6 +1,6 @@
 mod oidc;
 
-use crate::oidc::{LocalClient, User, ISSUER_URL};
+use crate::oidc::{init_oidc, LocalClient, User, ISSUER_URL};
 
 #[macro_use]
 extern crate rocket;
@@ -18,9 +18,9 @@ use env;
 
 use std::{collections::LinkedList, time::Duration};
 
-use openidconnect::{
-    core::CoreProviderMetadata, reqwest, reqwest::ClientBuilder, ClientId, IssuerUrl,
-};
+//use openidconnect::{
+//    core::CoreProviderMetadata, reqwest, reqwest::ClientBuilder, ClientId, IssuerUrl,
+//};
 
 use rdkafka::{
     config::ClientConfig,
@@ -86,26 +86,28 @@ async fn list_messages(user: User) -> Json<Messages> {
 
 #[launch]
 async fn rocket() -> _ {
-    let http_client = ClientBuilder::new()
-        // Following redirects opens the client up to SSRF vulnerabilities.
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .expect("Client should build");
-    let client_id: ClientId = ClientId::new(
-        env::var("OIDC_CLIENT_ID")
-            .unwrap()
-            .parse::<String>()
-            .unwrap(),
-    );
-    let issuer_url: IssuerUrl = IssuerUrl::new(ISSUER_URL.to_string()).unwrap();
+    //let http_client = ClientBuilder::new()
+    //    // Following redirects opens the client up to SSRF vulnerabilities.
+    //    .redirect(reqwest::redirect::Policy::none())
+    //    .build()
+    //    .expect("Client should build");
+    //let client_id: ClientId = ClientId::new(
+    //    env::var("OIDC_CLIENT_ID")
+    //        .unwrap()
+    //        .parse::<String>()
+    //        .unwrap(),
+    //);
+    //let issuer_url: IssuerUrl = IssuerUrl::new(ISSUER_URL.to_string()).unwrap();
 
-    // Use OpenID Connect Discovery to fetch the provider metadata.
-    let provider_metadata = CoreProviderMetadata::discover_async(issuer_url.clone(), &http_client)
-        .await
-        .unwrap();
+    //// Use OpenID Connect Discovery to fetch the provider metadata.
+    //let provider_metadata = CoreProviderMetadata::discover_async(issuer_url.clone(), &http_client)
+    //    .await
+    //    .unwrap();
 
-    let oidc_client: LocalClient =
-        LocalClient::from_provider_metadata(provider_metadata.clone(), client_id.clone(), None);
+    //let oidc_client: LocalClient =
+    //    LocalClient::from_provider_metadata(provider_metadata.clone(), client_id.clone(), None);
+
+    let oidc_client: LocalClient = init_oidc().await;
 
     let producer: FutureProducer = ClientConfig::new()
         .set(

@@ -5,11 +5,14 @@ use std::str::FromStr;
 use openidconnect::{
     core::{
         CoreAuthDisplay, CoreAuthPrompt, CoreErrorResponseType, CoreGenderClaim, CoreIdToken,
-        CoreIdTokenVerifier, CoreJsonWebKey, CoreJweContentEncryptionAlgorithm, CoreRevocableToken,
-        CoreRevocationErrorResponse, CoreTokenIntrospectionResponse, CoreTokenResponse,
+        CoreIdTokenVerifier, CoreJsonWebKey, CoreJweContentEncryptionAlgorithm,
+        CoreProviderMetadata, CoreRevocableToken, CoreRevocationErrorResponse,
+        CoreTokenIntrospectionResponse, CoreTokenResponse,
     },
-    Client, EmptyAdditionalClaims, EndpointMaybeSet, EndpointNotSet, EndpointSet, Nonce,
-    NonceVerifier, StandardErrorResponse,
+    reqwest,
+    reqwest::ClientBuilder,
+    Client, ClientId, EmptyAdditionalClaims, EndpointMaybeSet, EndpointNotSet, EndpointSet,
+    IssuerUrl, Nonce, NonceVerifier, StandardErrorResponse,
 };
 
 use rocket::{
@@ -130,4 +133,26 @@ impl NonceVerifier for &NoneNonce {
     fn verify(self, _: Option<&Nonce>) -> Result<(), String> {
         Ok(())
     }
+}
+
+pub(crate) async fn init_oidc() -> LocalClient {
+    let http_client = ClientBuilder::new()
+        // Following redirects opens the client up to SSRF vulnerabilities.
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("Client should build");
+    let client_id: ClientId = ClientId::new(
+        env::var("OIDC_CLIENT_ID")
+            .unwrap()
+            .parse::<String>()
+            .unwrap(),
+    );
+    let issuer_url: IssuerUrl = IssuerUrl::new(ISSUER_URL.to_string()).unwrap();
+
+    // Use OpenID Connect Discovery to fetch the provider metadata.
+    let provider_metadata = CoreProviderMetadata::discover_async(issuer_url.clone(), &http_client)
+        .await
+        .unwrap();
+
+    LocalClient::from_provider_metadata(provider_metadata.clone(), client_id.clone(), None)
 }
