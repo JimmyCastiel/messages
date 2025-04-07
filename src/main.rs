@@ -1,13 +1,10 @@
 use thiserror::Error;
 
 #[macro_use]
-use tokio;
-
-#[macro_use]
 extern crate rocket;
 use rocket::{
     http::Status,
-    request::{self, FromRequest, Outcome, Request},
+    request::{FromRequest, Outcome, Request},
     serde::{
         json::{to_string, Json},
         Deserialize, Serialize,
@@ -18,18 +15,19 @@ use uuid7::uuid7;
 
 use env;
 
-use std::{collections::LinkedList, option, str::FromStr, time::Duration};
+use std::{collections::LinkedList, str::FromStr, time::Duration};
 
 use openidconnect::{
     core::{
-        CoreClient, CoreIdToken, CoreIdTokenVerifier, CoreJsonWebKey, CoreJsonWebKeySet,
-        CoreJsonWebKeyUse, CoreProviderMetadata,
+        CoreAuthDisplay, CoreAuthPrompt, CoreClient, CoreErrorResponseType, CoreGenderClaim,
+        CoreIdToken, CoreIdTokenVerifier, CoreJsonWebKey, CoreJweContentEncryptionAlgorithm,
+        CoreProviderMetadata, CoreRevocableToken, CoreRevocationErrorResponse,
+        CoreTokenIntrospectionResponse, CoreTokenResponse,
     },
     reqwest,
     reqwest::ClientBuilder,
-    ClientId,
-    ClientSecret,
-    IssuerUrl, //JsonWebKey, JsonWebKeyUse,
+    Client, ClientId, ClientSecret, EmptyAdditionalClaims, EndpointMaybeSet, EndpointNotSet,
+    EndpointSet, IdTokenVerifier, IssuerUrl, Nonce, NonceVerifier, StandardErrorResponse,
 };
 
 use rdkafka::{
@@ -39,9 +37,34 @@ use rdkafka::{
 };
 
 // https://www.scottbrady.io/tools/jwt
-const TOKEN: &str = "eyJ0eXAiOiJKV1QiLCJhbGciOiJFUzI1NiIsImtpZCI6IjNmYTAxZGU4MTMwMjNkYjk4MzlmNWI0MGNmNGI5ZGYxIn0.eyJpc3MiOiJodHRwczovL2lkcC5sb2NhbCIsImF1ZCI6Im15X2NsaWVudF9hcHAiLCJzdWIiOiI1YmU4NjM1OTA3M2M0MzRiYWQyZGEzOTMyMjIyZGFiZSIsImV4cCI6MTc0Mzg0MDA3OCwiaWF0IjoxNzQzODM5Nzc4fQ.FL6sCl7MS-Ddgv2GyNnHyzcO-HwFDGyiAj5YVkaSeUT2VOU42MmQocPwuyKzQH_RGkexeafr0jCNhbIWwyXZPg";
 const ISSUER_URL: &str = "https://keycloakx.dev.cpaaseng.dev/auth/realms/operations";
-static mut oidc_client: Option<CoreClient> = None;
+
+type LocalClient<
+    HasAuthUrl = EndpointSet,
+    HasDeviceAuthUrl = EndpointNotSet,
+    HasIntrospectionUrl = EndpointNotSet,
+    HasRevocationUrl = EndpointNotSet,
+    HasTokenUrl = EndpointMaybeSet,
+    HasUserInfoUrl = EndpointMaybeSet,
+> = Client<
+    EmptyAdditionalClaims,
+    CoreAuthDisplay,
+    CoreGenderClaim,
+    CoreJweContentEncryptionAlgorithm,
+    CoreJsonWebKey,
+    CoreAuthPrompt,
+    StandardErrorResponse<CoreErrorResponseType>,
+    CoreTokenResponse,
+    CoreTokenIntrospectionResponse,
+    CoreRevocableToken,
+    CoreRevocationErrorResponse,
+    HasAuthUrl,
+    HasDeviceAuthUrl,
+    HasIntrospectionUrl,
+    HasRevocationUrl,
+    HasTokenUrl,
+    HasUserInfoUrl,
+>;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(crate = "rocket::serde")]
@@ -54,7 +77,10 @@ struct Message {
 type Messages = LinkedList<Message>;
 
 #[derive(Error, Debug)]
-enum UserError {}
+enum UserError {
+    #[error("No specific reason")]
+    Empty,
+}
 
 #[derive(Debug)]
 struct User {}
@@ -63,14 +89,81 @@ struct User {}
 impl<'r> FromRequest<'r> for User {
     type Error = UserError;
 
-    async fn from_request(req: &'r Request<'_>) -> Outcome<Self, Self::Error> {
+    async fn from_request(request: &'r Request<'_>) -> Outcome<Self, Self::Error> {
         /* .. */
-        Outcome::Success(User {})
+        let oidc_client = request.rocket().state::<LocalClient>();
+        let headers = request.headers();
+        if !headers.contains("Authorization") {
+            error!("The authorization header is missing");
+            Outcome::Error((Status::Unauthorized, Self::Error::Empty))
+        } else {
+            match headers.get_one("authorization") {
+                Some(bearer) => {
+                    let split: Vec<&str> = bearer.split(' ').collect();
+                    if split.len() != 2 {
+                        error!("Header is incorrect");
+                        return Outcome::Error((Status::Unauthorized, Self::Error::Empty));
+                    }
+
+                    if split[0].to_lowercase() != "bearer" {
+                        error!("Authorization isn't bearer");
+                        return Outcome::Error((Status::Unauthorized, Self::Error::Empty));
+                    }
+
+                    let id_token: Result<CoreIdToken, _> = CoreIdToken::from_str(split[1]);
+                    if !id_token.is_ok() {
+                        error!("Token couldn't be parsed");
+                        return Outcome::Error((Status::Unauthorized, Self::Error::Empty));
+                    }
+                    let id_token: CoreIdToken = id_token.unwrap();
+
+                    if oidc_client.is_none() {
+                        error!("Couldn't retrieve the oidc client");
+                        return Outcome::Error((Status::Unauthorized, Self::Error::Empty));
+                    }
+
+                    let id_token_verifier: CoreIdTokenVerifier =
+                        oidc_client.unwrap().id_token_verifier();
+
+                    let nonce_verifier: NoneNonce = NoneNonce::new();
+
+                    let claims = id_token.claims(&id_token_verifier, &nonce_verifier);
+
+                    if claims.is_err() {
+                        error!("Token is invalid : {:?}", claims);
+                        return Outcome::Error((Status::Unauthorized, Self::Error::Empty));
+                    }
+
+                    Outcome::Success(User {})
+                }
+                _ => {
+                    error!("Something wrong happened");
+
+                    Outcome::Error((Status::Unauthorized, Self::Error::Empty))
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct NoneNonce {}
+
+impl NoneNonce {
+    fn new() -> Self {
+        NoneNonce {}
+    }
+}
+
+impl NonceVerifier for &NoneNonce {
+    fn verify(self, _: Option<&Nonce>) -> Result<(), String> {
+        Ok(())
     }
 }
 
 #[post("/", data = "<message>")]
 async fn send_message(
+    user: User,
     message: Json<Message>,
     state: &State<FutureProducer>,
 ) -> (Status, Json<String>) {
@@ -98,7 +191,7 @@ async fn send_message(
 }
 
 #[get("/<message_id>")]
-async fn get_message(message_id: &str) -> Json<Message> {
+async fn get_message(user: User, message_id: &str) -> Json<Message> {
     info!("message with id {} was requested", message_id);
     // TODO implement authentication
     Json(Message {
@@ -109,70 +202,43 @@ async fn get_message(message_id: &str) -> Json<Message> {
 }
 
 #[get("/")]
-async fn list_messages() -> Json<Messages> {
+async fn list_messages(user: User) -> Json<Messages> {
     // TODO implement authentication
     Json(LinkedList::new())
 }
 
-async fn init_oidc() {
+#[launch]
+async fn rocket() -> _ {
     let http_client = ClientBuilder::new()
         // Following redirects opens the client up to SSRF vulnerabilities.
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .expect("Client should build");
-    let client_id: ClientId = ClientId::new("client_id".to_string());
+    let client_id: ClientId = ClientId::new("test".to_string());
     let issuer_url: IssuerUrl = IssuerUrl::new(ISSUER_URL.to_string()).unwrap();
-    let id_token: CoreIdToken = CoreIdToken::from_str(TOKEN).unwrap();
 
     // Use OpenID Connect Discovery to fetch the provider metadata.
     let provider_metadata = CoreProviderMetadata::discover_async(issuer_url.clone(), &http_client)
         .await
         .unwrap();
 
-    let client = CoreClient::from_provider_metadata(
-        provider_metadata.clone(),
-        client_id.clone(),
-        Some(ClientSecret::new("client_secret".to_string())),
-    );
+    let oidc_client: LocalClient =
+        CoreClient::from_provider_metadata(provider_metadata.clone(), client_id.clone(), None);
 
-    //let jwks_uri = provider_metadata.jwks_uri();
-    //
-    //let jwks = CoreJsonWebKeySet::fetch_async(&jwks_uri, &http_client)
-    //    .await
-    //    .unwrap();
+    let producer: FutureProducer = ClientConfig::new()
+        .set(
+            "bootstrap.servers",
+            env::var("KAFKA_BROKERS")
+                .unwrap()
+                .parse::<String>()
+                .unwrap(),
+        )
+        .set("message.timeout.ms", "5000")
+        .create()
+        .expect("Producer creation error");
 
-    let verifier: CoreIdTokenVerifier = client.id_token_verifier();
-
-    let signing_key: &CoreJsonWebKey = id_token.signing_key(&verifier).unwrap();
-
-    //let algo = signing_key.signing_alg();
-
-    //println!("{:?}", algo);
-    //signing_key.verify_signature(signing_key.signing_alg().unwrap, b"", b"");
-
-    // Verify the token
-    //let claims = id_token.claims(&verifier, jwks);
+    rocket::build()
+        .mount("/", routes![list_messages, get_message, send_message])
+        .manage(oidc_client)
+        .manage(producer)
 }
-
-#[tokio::main]
-async fn main() {
-    init_oidc().await
-}
-
-//#[launch]
-//async fn rocket() -> _ {
-//    let producer: FutureProducer = ClientConfig::new()
-//        .set(
-//            "bootstrap.servers",
-//            env::var("KAFKA_BROKERS")
-//                .unwrap()
-//                .parse::<String>()
-//                .unwrap(),
-//        )
-//        .set("message.timeout.ms", "5000")
-//        .create()
-//        .expect("Producer creation error");
-//    rocket::build()
-//        .mount("/", routes![list_messages, get_message, send_message])
-//        .manage(producer)
-//}
