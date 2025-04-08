@@ -1,5 +1,7 @@
 use thiserror::Error;
 
+use env;
+
 use std::str::FromStr;
 
 use openidconnect::{
@@ -19,9 +21,6 @@ use rocket::{
     http::Status,
     request::{FromRequest, Outcome, Request},
 };
-
-// https://www.scottbrady.io/tools/jwt
-pub(crate) const ISSUER_URL: &str = "https://keycloakx.dev.cpaaseng.dev/auth/realms/operations";
 
 pub(crate) type LocalClient<
     HasAuthUrl = EndpointSet,
@@ -64,57 +63,56 @@ impl<'r> FromRequest<'r> for User {
     type Error = UserError;
 
     async fn from_request(request: &'r Request<'_>) -> Outcome<Self, Self::Error> {
-        /* .. */
-        let oidc_client = request.rocket().state::<LocalClient>();
         let headers = request.headers();
-        if !headers.contains("Authorization") {
-            error!("The authorization header is missing");
-            Outcome::Error((Status::Unauthorized, Self::Error::Empty))
-        } else {
-            match headers.get_one("authorization") {
-                Some(bearer) => {
-                    let split: Vec<&str> = bearer.split(' ').collect();
-                    if split.len() != 2 {
-                        error!("Header is incorrect");
-                        return Outcome::Error((Status::Unauthorized, Self::Error::Empty));
-                    }
+        match headers.get_one("authorization") {
+            Some(bearer) => {
+                let oidc_client = request.rocket().state::<LocalClient>();
+                match oidc_client {
+                    Some(oidc_client) => {
+                        let split: Vec<&str> = bearer.split(' ').collect();
+                        if split.len() != 2 {
+                            error!("Header is incorrect");
+                            return Outcome::Error((Status::Unauthorized, Self::Error::Empty));
+                        }
 
-                    if split[0].to_lowercase() != "bearer" {
-                        error!("Authorization isn't bearer");
-                        return Outcome::Error((Status::Unauthorized, Self::Error::Empty));
-                    }
+                        if split[0].to_lowercase() != "bearer" {
+                            error!("Authorization isn't bearer");
+                            return Outcome::Error((Status::Unauthorized, Self::Error::Empty));
+                        }
 
-                    let id_token: Result<CoreIdToken, _> = CoreIdToken::from_str(split[1]);
-                    if !id_token.is_ok() {
-                        error!("Token couldn't be parsed");
-                        return Outcome::Error((Status::Unauthorized, Self::Error::Empty));
-                    }
-                    let id_token: CoreIdToken = id_token.unwrap();
+                        let id_token: Result<CoreIdToken, _> = CoreIdToken::from_str(split[1]);
+                        match id_token {
+                            Err(_) => {
+                                error!("Token couldn't be parsed");
+                                Outcome::Error((Status::Unauthorized, Self::Error::Empty))
+                            }
+                            Ok(id_token) => {
+                                let id_token_verifier: CoreIdTokenVerifier =
+                                    oidc_client.id_token_verifier();
 
-                    if oidc_client.is_none() {
+                                let nonce_verifier: NoneNonce = NoneNonce::new();
+
+                                let claims = id_token.claims(&id_token_verifier, &nonce_verifier);
+
+                                match claims {
+                                    Ok(claims) => Outcome::Success(User {}),
+                                    Err(claims) => {
+                                        error!("Token is invalid : {:?}", claims);
+                                        Outcome::Error((Status::Unauthorized, Self::Error::Empty))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    None => {
                         error!("Couldn't retrieve the oidc client");
-                        return Outcome::Error((Status::Unauthorized, Self::Error::Empty));
+                        Outcome::Error((Status::Unauthorized, Self::Error::Empty))
                     }
-
-                    let id_token_verifier: CoreIdTokenVerifier =
-                        oidc_client.unwrap().id_token_verifier();
-
-                    let nonce_verifier: NoneNonce = NoneNonce::new();
-
-                    let claims = id_token.claims(&id_token_verifier, &nonce_verifier);
-
-                    if claims.is_err() {
-                        error!("Token is invalid : {:?}", claims);
-                        return Outcome::Error((Status::Unauthorized, Self::Error::Empty));
-                    }
-
-                    Outcome::Success(User {})
                 }
-                _ => {
-                    error!("Something wrong happened");
-
-                    Outcome::Error((Status::Unauthorized, Self::Error::Empty))
-                }
+            }
+            None => {
+                error!("The authorization header is missing");
+                Outcome::Error((Status::Unauthorized, Self::Error::Empty))
             }
         }
     }
@@ -147,7 +145,13 @@ pub(crate) async fn init_oidc() -> LocalClient {
             .parse::<String>()
             .unwrap(),
     );
-    let issuer_url: IssuerUrl = IssuerUrl::new(ISSUER_URL.to_string()).unwrap();
+    let issuer_url: IssuerUrl = IssuerUrl::new(
+        env::var("OIDC_ISSUER_URL")
+            .unwrap()
+            .parse::<String>()
+            .unwrap(),
+    )
+    .unwrap();
 
     // Use OpenID Connect Discovery to fetch the provider metadata.
     let provider_metadata = CoreProviderMetadata::discover_async(issuer_url.clone(), &http_client)
