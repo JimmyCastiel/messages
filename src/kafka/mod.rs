@@ -13,7 +13,7 @@ pub(crate) enum KafkaError {
 }
 
 pub(crate) struct KafkaClient {
-    producer: FutureProducer,
+    pub(self) producer: FutureProducer,
     topic: String,
 }
 
@@ -41,3 +41,6 @@ impl KafkaClient {
         Ok(KafkaClient { producer, topic })
     }
 }
+
+#[cfg(test)]
+mod test;
