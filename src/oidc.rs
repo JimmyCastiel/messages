@@ -13,7 +13,7 @@ use openidconnect::{
     },
     reqwest,
     reqwest::ClientBuilder,
-    Client, ClientId, EmptyAdditionalClaims, EndpointMaybeSet, EndpointNotSet, EndpointSet,
+    ClaimsVerificationError, Client, ClientId, EmptyAdditionalClaims, EndpointMaybeSet, EndpointNotSet, EndpointSet,
     IssuerUrl, Nonce, NonceVerifier, StandardErrorResponse,
 };
 
@@ -51,8 +51,58 @@ pub(crate) type LocalClient<
 
 #[derive(Error, Debug)]
 pub(crate) enum UserError {
-    #[error("No specific reason")]
-    Empty,
+    #[error("Couldn't retrieve the oidc client")]
+    ClientError,
+    #[error("The authorization header is missing")]
+    HeaderError,
+    #[error("Invalid authorization header format")]
+    HeaderFormatError,
+    #[error("Token couldn't be parsed")]
+    TokenParseError,
+    #[error("Token is expired")]
+    TokenExpired(ClaimsVerificationError),
+    #[error("Token audience is invalid")]
+    TokenInvalidAudience(ClaimsVerificationError),
+    #[error("Token auth context is invalid")]
+    TokenInvalidAuthContext(ClaimsVerificationError),
+    #[error("Token auth time is invalid")]
+    TokenInvalidAuthTime(ClaimsVerificationError),
+    #[error("Token issuer is invalid")]
+    TokenInvalidIssuer(ClaimsVerificationError),
+    #[error("Token nonce is invalid")]
+    TokenInvalidNonce(ClaimsVerificationError),
+    #[error("Token subject is invalid")]
+    TokenInvalidSubject(ClaimsVerificationError),
+    #[error("Undefined error")]
+    TokenOther(ClaimsVerificationError),
+    #[error("Token signature is invalid")]
+    TokenSignatureVerification(ClaimsVerificationError),
+    #[error("Token unsupported key type")]
+    TokenUnsupported(ClaimsVerificationError),
+    #[error("Undefined error")]
+    Undefined,
+}
+
+impl From<ClaimsVerificationError> for UserError {
+    fn from(err: ClaimsVerificationError) -> Self {
+        match err {
+            ClaimsVerificationError::Expired(_) => UserError::TokenExpired(err),
+            ClaimsVerificationError::InvalidAudience(_) => UserError::TokenInvalidAudience(err),
+            ClaimsVerificationError::InvalidAuthContext(_) => UserError::TokenInvalidAuthContext(err),
+            ClaimsVerificationError::InvalidAuthTime(_) => UserError::TokenInvalidAuthTime(err),
+            ClaimsVerificationError::InvalidIssuer(_) => UserError::TokenInvalidIssuer(err),
+            ClaimsVerificationError::InvalidNonce(_) => UserError::TokenInvalidNonce(err),
+            ClaimsVerificationError::InvalidSubject(_) => UserError::TokenInvalidSubject(err),
+            ClaimsVerificationError::SignatureVerification(_) => {
+                UserError::TokenSignatureVerification(err)
+            }
+            ClaimsVerificationError::Unsupported(_) => {
+                UserError::TokenUnsupported(err)
+            },
+            ClaimsVerificationError::Other(_) => UserError::TokenOther(err),
+            _ => UserError::Undefined,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -67,7 +117,7 @@ impl<'r> FromRequest<'r> for User {
             Some(client) => client,
             None => {
                 rocket::error!("Couldn't retrieve the oidc client");
-                return Outcome::Error((Status::Unauthorized, Self::Error::Empty));
+                return Outcome::Error((Status::Unauthorized, Self::Error::ClientError));
             }
         };
 
@@ -75,22 +125,22 @@ impl<'r> FromRequest<'r> for User {
         let bearer = match headers.get_one("authorization") {
             Some(bearer) => bearer,
             None => {
-                rocket::error!("The authorization header is missing");
-                return Outcome::Error((Status::Unauthorized, Self::Error::Empty));
+                rocket::error!("The authorization header is missin or isn't in the correct format");
+                return Outcome::Error((Status::Unauthorized, Self::Error::HeaderError));
             }
         };
 
         let split: Vec<&str> = bearer.split(' ').collect();
         if split.len() != 2 || split[0].to_lowercase() != "bearer" {
             rocket::error!("Invalid authorization header format");
-            return Outcome::Error((Status::Unauthorized, Self::Error::Empty));
+            return Outcome::Error((Status::Unauthorized, Self::Error::HeaderFormatError));
         }
 
         let id_token = match CoreIdToken::from_str(split[1]) {
             Ok(token) => token,
             Err(_) => {
                 rocket::error!("Token couldn't be parsed");
-                return Outcome::Error((Status::Unauthorized, Self::Error::Empty));
+                return Outcome::Error((Status::Unauthorized, Self::Error::TokenParseError));
             }
         };
 
@@ -101,7 +151,7 @@ impl<'r> FromRequest<'r> for User {
             Ok(_) => Outcome::Success(User {}),
             Err(claims) => {
                 rocket::error!("Token is invalid: {:?}", claims);
-                Outcome::Error((Status::Unauthorized, Self::Error::Empty))
+                Outcome::Error((Status::Unauthorized, claims.into()))
             }
         }
     }

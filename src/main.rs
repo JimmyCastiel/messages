@@ -32,7 +32,7 @@ type Messages = LinkedList<Message>;
 
 #[post("/", data = "<message>")]
 async fn send_message(
-    //_user: User,
+    _user: User,
     message: Json<Message>,
     kafka_client: &State<KafkaClient>,
 ) -> (Status, Json<String>) {
