@@ -1,44 +1,66 @@
 use thiserror::Error;
 
-use rdkafka::{config::ClientConfig, producer::{FutureProducer, FutureRecord}};
+use rdkafka::{
+    config::ClientConfig,
+    producer::{
+        FutureProducer,
+        FutureRecord
+    }
+};
 
 use std::{env, time::Duration};
 
+pub type KafkaFutureProducer = FutureProducer;
+
 #[derive(Error, Debug)]
-pub(crate) enum KafkaError {
+pub enum ProducerError {
     #[error("Couldn't create producer")]
     ProducerCreationError,
     #[error("Message delivery failed")]
     MessageDeliveryError,
 }
 
-pub(crate) struct KafkaClient {
-    pub(self) producer: FutureProducer,
+#[async_trait]
+pub trait Producer {
+    async fn send_message(&self, key: &str, message: &str) -> Result<(), ProducerError>;
+}
+
+#[derive(Debug, Clone)]
+pub struct KafkaProducer<P: Send + Sync + 'static> {
+    pub(self) producer: P,
     topic: String,
 }
 
-impl KafkaClient {
-    pub async fn send_message(&self, key: &str, message: &str) -> Result<(), KafkaError> {
+impl KafkaProducer<FutureProducer> {
+    pub fn new() -> Result<Self, ProducerError> {
+        let producer = ClientConfig::new()
+            .set("bootstrap.servers", &env::var("KAFKA_BROKERS")
+            .expect("KAFKA_BROKERS not set"))
+            .set("message.timeout.ms", "5000")
+            .create()
+            .map_err(|_| ProducerError::ProducerCreationError)?;
+
+        let topic = env::var("KAFKA_TOPIC")
+            .expect("KAFKA_TOPIC not set");
+
+        Ok(KafkaProducer
+         { producer, topic })
+    }
+}
+
+#[async_trait]
+impl Producer for &KafkaProducer<FutureProducer> {
+    async fn send_message(&self, key: &str, message: &str) -> Result<(), ProducerError> {
         self.producer
             .send(
-                FutureRecord::to(&self.topic).key(key).payload(message),
+                FutureRecord::to(&self.topic)
+                    .key(key)
+                    .payload(message),
                 Duration::from_secs(0),
             )
             .await
             .map(|_| ())
-            .map_err(|_| KafkaError::MessageDeliveryError)
-    }
-
-    pub fn new() -> Result<Self, KafkaError> {
-        let producer = ClientConfig::new()
-            .set("bootstrap.servers", &env::var("KAFKA_BROKERS").expect("KAFKA_BROKERS not set"))
-            .set("message.timeout.ms", "5000")
-            .create()
-            .map_err(|_| KafkaError::ProducerCreationError)?;
-
-        let topic = env::var("KAFKA_TOPIC").expect("KAFKA_TOPIC not set");
-
-        Ok(KafkaClient { producer, topic })
+            .map_err(|_| ProducerError::MessageDeliveryError)
     }
 }
 

@@ -20,7 +20,7 @@ use rocket::{
     request::{FromRequest, Outcome, Request},
 };
 
-pub(crate) type LocalClient<
+pub(crate) type LocalOidcClient<
     HasAuthUrl = EndpointSet,
     HasDeviceAuthUrl = EndpointNotSet,
     HasIntrospectionUrl = EndpointNotSet,
@@ -69,7 +69,7 @@ impl<'r> FromRequest<'r> for User {
     type Error = UserError;
 
     async fn from_request(request: &'r Request<'_>) -> Outcome<Self, Self::Error> {
-        let oidc_client: LocalClient = match request.rocket().state::<LocalClient>() {
+        let oidc_client: LocalOidcClient = match request.rocket().state::<LocalOidcClient>() {
             Some(client) => client.clone(),
             None => {
                 rocket::error!("OIDC client not found in request state");
@@ -130,7 +130,7 @@ impl NonceVerifier for &NoneNonce {
     }
 }
 
-pub(crate) async fn init_oidc() -> LocalClient {
+pub(crate) async fn init_oidc() -> LocalOidcClient {
     let http_client = ClientBuilder::new()
         .redirect(reqwest::redirect::Policy::none())
         .build()
@@ -149,5 +149,5 @@ pub(crate) async fn init_oidc() -> LocalClient {
         .await
         .expect("Failed to fetch provider metadata");
 
-    LocalClient::from_provider_metadata(provider_metadata, client_id, None)
+    LocalOidcClient::from_provider_metadata(provider_metadata, client_id, None)
 }

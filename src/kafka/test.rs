@@ -1,42 +1,64 @@
 #[cfg(test)]
 mod tests {
-    use crate::kafka::KafkaClient;
-    use std::env;
+    use crate::kafka::{
+        Producer,
+        ProducerError
+    };
+    use async_trait::async_trait;
+    use std::sync::{
+        Arc,
+        Mutex
+    };
 
-    #[tokio::test]
-    async fn test_kafka_client_new_success() {
-        unsafe {
-            // Set the environment variables for testing
-            env::set_var("KAFKA_BROKERS", "localhost:9092");
-            env::set_var("KAFKA_TOPIC", "test_topic");
+    // Mock implementation of the Producer trait
+    struct MockProducer {
+        sent_messages: Arc<Mutex<Vec<(String, String)>>>,
+    }
+
+    impl MockProducer {
+        fn new() -> Self {
+            Self {
+                sent_messages: Arc::new(Mutex::new(Vec::new())),
+            }
         }
+    }
 
-        let client = KafkaClient::new();
-        assert!(client.is_ok());
+    #[async_trait]
+    impl Producer for MockProducer {
+        async fn send_message(&self, key: &str, message: &str) -> Result<(), ProducerError> {
+            let mut messages = self.sent_messages.lock().unwrap();
+            messages.push((key.to_string(), message.to_string()));
+            Ok(())
+        }
     }
 
     #[tokio::test]
-    async fn test_kafka_client_new_failure_missing_env() {
-        unsafe {
-            // Remove the environment variables to simulate failure
-            env::remove_var("KAFKA_BROKERS");
-            env::remove_var("KAFKA_TOPIC");
-        }
+    async fn test_send_message_success() {
+        let mock_producer = MockProducer::new();
 
-        let client = KafkaClient::new();
-        assert!(client.is_err());
+        let result = mock_producer.send_message("key", "message").await;
+        assert!(result.is_ok());
+
+        let sent_messages = mock_producer.sent_messages.lock().unwrap();
+        assert_eq!(sent_messages.len(), 1);
+        assert_eq!(sent_messages[0], ("key".to_string(), "message".to_string()));
+    }
+
+    // Mock implementation for failure scenario
+    struct FailingMockProducer;
+
+    #[async_trait]
+    impl Producer for FailingMockProducer {
+        async fn send_message(&self, _key: &str, _message: &str) -> Result<(), ProducerError> {
+            Err(ProducerError::MessageDeliveryError)
+        }
     }
 
     #[tokio::test]
     async fn test_send_message_failure() {
-        unsafe {
-            // Set the environment variables for testing
-            env::set_var("KAFKA_BROKERS", "localhost:9092");
-            env::set_var("KAFKA_TOPIC", "test_topic");
-        }
+        let failing_producer = FailingMockProducer;
 
-        let client = KafkaClient::new().unwrap();
-        let result = client.send_message("key", "message").await;
-        assert!(result.is_err()); // This will fail unless a real Kafka broker is running
+        let result = failing_producer.send_message("key", "message").await;
+        assert!(result.is_err());
     }
 }

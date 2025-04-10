@@ -2,8 +2,16 @@ mod oidc;
 mod kafka;
 
 use crate::{
-    kafka::KafkaClient,
-    oidc::{init_oidc, LocalClient, User}
+    kafka::{
+        Producer,
+        KafkaProducer,
+        KafkaFutureProducer
+    },
+    oidc::{
+        init_oidc,
+        LocalOidcClient,
+        User
+    }
 };
 
 #[macro_use]
@@ -18,7 +26,7 @@ use rocket::{
 };
 use uuid7::uuid7;
 
-use std::{collections::LinkedList};
+use std::collections::LinkedList;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(crate = "rocket::serde")]
@@ -34,13 +42,15 @@ type Messages = LinkedList<Message>;
 async fn send_message(
     _user: User,
     message: Json<Message>,
-    kafka_client: &State<KafkaClient>,
+    kafka_client: &State<KafkaProducer<KafkaFutureProducer>>,
 ) -> (Status, Json<String>) {
     rocket::info!("{:?}", message);
     let message_id: String = uuid7().to_string();
     // TODO implement checks
     let m: String = to_string(&message.into_inner()).unwrap();
+
     let response = kafka_client
+        .inner()
         .send_message(&message_id, &m)
         .await;
 
@@ -69,9 +79,9 @@ async fn list_messages(_user: User) -> Json<Messages> {
 
 #[launch]
 async fn rocket() -> _ {
-    let oidc_client: LocalClient = init_oidc().await;
+    let oidc_client: LocalOidcClient = init_oidc().await;
 
-    let producer: KafkaClient = KafkaClient::new()
+    let producer: KafkaProducer<KafkaFutureProducer> = KafkaProducer::<KafkaFutureProducer>::new()
         .expect("Couldn't create Kafka producer");
 
     rocket::build()
