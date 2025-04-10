@@ -17,7 +17,7 @@ pub enum ProducerError {
     #[error("Couldn't create producer")]
     ProducerCreationError,
     #[error("Message delivery failed")]
-    MessageDeliveryError,
+    MessageDeliveryError(#[from] rdkafka::error::KafkaError),
 }
 
 #[async_trait]
@@ -60,7 +60,7 @@ impl Producer for &KafkaProducer<FutureProducer> {
             )
             .await
             .map(|_| ())
-            .map_err(|_| ProducerError::MessageDeliveryError)
+            .map_err(|e| e.0.into())
     }
 }
 
