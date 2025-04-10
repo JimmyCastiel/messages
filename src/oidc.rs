@@ -128,19 +128,21 @@ pub(crate) async fn init_oidc() -> LocalClient {
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .expect("Client should build");
-    let client_id: ClientId = ClientId::new(
-        env::var("OIDC_CLIENT_ID")
-            .unwrap()
-            .parse::<String>()
-            .unwrap(),
-    );
+
     let issuer_url: IssuerUrl = IssuerUrl::new(
         env::var("OIDC_ISSUER_URL")
-            .unwrap()
+            .expect("OIDC_ISSUER_URL environment variable is not set")
             .parse::<String>()
             .unwrap(),
     )
     .unwrap();
+
+    let client_id: ClientId = ClientId::new(
+        env::var("OIDC_CLIENT_ID")
+            .expect("OIDC_CLIENT_ID environment variable is not set")
+            .parse::<String>()
+            .unwrap(),
+    );
 
     // Use OpenID Connect Discovery to fetch the provider metadata.
     let provider_metadata = CoreProviderMetadata::discover_async(issuer_url.clone(), &http_client)
