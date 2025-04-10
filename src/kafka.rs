@@ -1,8 +1,11 @@
-use env;
+use thiserror::Error;
 
 use rdkafka::{config::ClientConfig, producer::{FutureProducer, FutureRecord}};
-use thiserror::Error;
-use std::time::Duration;
+
+use std::{
+    env,
+    time::Duration,
+};
 
 #[derive(Error, Debug)]
 pub(crate) enum KafkaError {

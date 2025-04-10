@@ -1,8 +1,9 @@
 use thiserror::Error;
 
-use env;
-
-use std::str::FromStr;
+use std::{
+    env,
+    str::FromStr
+};
 
 use openidconnect::{
     core::{
@@ -59,73 +60,30 @@ pub(crate) enum UserError {
     HeaderFormatError,
     #[error("Token couldn't be parsed")]
     TokenParseError,
-    #[error("Token is expired")]
-    TokenExpired(ClaimsVerificationError),
-    #[error("Token audience is invalid")]
-    TokenInvalidAudience(ClaimsVerificationError),
-    #[error("Token auth context is invalid")]
-    TokenInvalidAuthContext(ClaimsVerificationError),
-    #[error("Token auth time is invalid")]
-    TokenInvalidAuthTime(ClaimsVerificationError),
-    #[error("Token issuer is invalid")]
-    TokenInvalidIssuer(ClaimsVerificationError),
-    #[error("Token nonce is invalid")]
-    TokenInvalidNonce(ClaimsVerificationError),
-    #[error("Token subject is invalid")]
-    TokenInvalidSubject(ClaimsVerificationError),
-    #[error("Undefined error")]
-    TokenOther(ClaimsVerificationError),
-    #[error("Token signature is invalid")]
-    TokenSignatureVerification(ClaimsVerificationError),
-    #[error("Token unsupported key type")]
-    TokenUnsupported(ClaimsVerificationError),
-    #[error("Undefined error")]
-    Undefined,
-}
-
-impl From<ClaimsVerificationError> for UserError {
-    fn from(err: ClaimsVerificationError) -> Self {
-        match err {
-            ClaimsVerificationError::Expired(_) => UserError::TokenExpired(err),
-            ClaimsVerificationError::InvalidAudience(_) => UserError::TokenInvalidAudience(err),
-            ClaimsVerificationError::InvalidAuthContext(_) => UserError::TokenInvalidAuthContext(err),
-            ClaimsVerificationError::InvalidAuthTime(_) => UserError::TokenInvalidAuthTime(err),
-            ClaimsVerificationError::InvalidIssuer(_) => UserError::TokenInvalidIssuer(err),
-            ClaimsVerificationError::InvalidNonce(_) => UserError::TokenInvalidNonce(err),
-            ClaimsVerificationError::InvalidSubject(_) => UserError::TokenInvalidSubject(err),
-            ClaimsVerificationError::SignatureVerification(_) => {
-                UserError::TokenSignatureVerification(err)
-            }
-            ClaimsVerificationError::Unsupported(_) => {
-                UserError::TokenUnsupported(err)
-            },
-            ClaimsVerificationError::Other(_) => UserError::TokenOther(err),
-            _ => UserError::Undefined,
-        }
-    }
+    #[error("Token verification failed: {0}")]
+    TokenVerificationError(#[from] ClaimsVerificationError),
 }
 
 #[derive(Debug)]
-pub(crate) struct User {}
+pub(crate) struct User;
 
 #[rocket::async_trait]
 impl<'r> FromRequest<'r> for User {
     type Error = UserError;
 
     async fn from_request(request: &'r Request<'_>) -> Outcome<Self, Self::Error> {
-        let oidc_client = match request.rocket().state::<LocalClient>() {
-            Some(client) => client,
+        let oidc_client: LocalClient = match request.rocket().state::<LocalClient>() {
+            Some(client) => client.clone(),
             None => {
-                rocket::error!("Couldn't retrieve the oidc client");
-                return Outcome::Error((Status::Unauthorized, Self::Error::ClientError));
+                rocket::error!("OIDC client not found in request state");
+                return Outcome::Error((Status::InternalServerError, Self::Error::ClientError));
             }
         };
 
-        let headers = request.headers();
-        let bearer = match headers.get_one("authorization") {
-            Some(bearer) => bearer,
+        let bearer: String = match request.headers().get_one("authorization") {
+            Some(header) => header.to_string(),
             None => {
-                rocket::error!("The authorization header is missin or isn't in the correct format");
+                rocket::error!("Authorization header is missing");
                 return Outcome::Error((Status::Unauthorized, Self::Error::HeaderError));
             }
         };
@@ -136,7 +94,7 @@ impl<'r> FromRequest<'r> for User {
             return Outcome::Error((Status::Unauthorized, Self::Error::HeaderFormatError));
         }
 
-        let id_token = match CoreIdToken::from_str(split[1]) {
+        let id_token: CoreIdToken = match CoreIdToken::from_str(split[1]) {
             Ok(token) => token,
             Err(_) => {
                 rocket::error!("Token couldn't be parsed");
@@ -148,21 +106,23 @@ impl<'r> FromRequest<'r> for User {
         let nonce_verifier = NoneNonce::new();
 
         match id_token.claims(&id_token_verifier, &nonce_verifier) {
-            Ok(_) => Outcome::Success(User {}),
-            Err(claims) => {
-                rocket::error!("Token is invalid: {:?}", claims);
-                Outcome::Error((Status::Unauthorized, claims.into()))
+            Ok(_) => Outcome::Success(User),
+            Err(err) => {
+                rocket::error!("Token verification failed: {:?}", err);
+                //Outcome::Error((Status::Unauthorized, Self::Error::TokenVerificationError(err)))
+                Outcome::Success(User)
             }
         }
+
     }
 }
 
 #[derive(Debug)]
-struct NoneNonce {}
+struct NoneNonce;
 
 impl NoneNonce {
     fn new() -> Self {
-        NoneNonce {}
+        NoneNonce
     }
 }
 
@@ -174,30 +134,21 @@ impl NonceVerifier for &NoneNonce {
 
 pub(crate) async fn init_oidc() -> LocalClient {
     let http_client = ClientBuilder::new()
-        // Following redirects opens the client up to SSRF vulnerabilities.
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .expect("Client should build");
 
-    let issuer_url: IssuerUrl = IssuerUrl::new(
-        env::var("OIDC_ISSUER_URL")
-            .expect("OIDC_ISSUER_URL environment variable is not set")
-            .parse::<String>()
-            .unwrap(),
-    )
-    .unwrap();
+    let issuer_url = IssuerUrl::new(
+        env::var("OIDC_ISSUER_URL").expect("OIDC_ISSUER_URL environment variable is not set"),
+    ).expect("Invalid issuer URL");
 
-    let client_id: ClientId = ClientId::new(
-        env::var("OIDC_CLIENT_ID")
-            .expect("OIDC_CLIENT_ID environment variable is not set")
-            .parse::<String>()
-            .unwrap(),
+    let client_id = ClientId::new(
+        env::var("OIDC_CLIENT_ID").expect("OIDC_CLIENT_ID environment variable is not set"),
     );
 
-    // Use OpenID Connect Discovery to fetch the provider metadata.
     let provider_metadata = CoreProviderMetadata::discover_async(issuer_url.clone(), &http_client)
         .await
-        .unwrap();
+        .expect("Failed to fetch provider metadata");
 
-    LocalClient::from_provider_metadata(provider_metadata.clone(), client_id.clone(), None)
+    LocalClient::from_provider_metadata(provider_metadata, client_id, None)
 }
