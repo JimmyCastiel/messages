@@ -1,21 +1,18 @@
 use thiserror::Error;
 
-use std::{
-    env,
-    str::FromStr
-};
+use std::{env, str::FromStr};
 
 use openidconnect::{
     core::{
         CoreAuthDisplay, CoreAuthPrompt, CoreErrorResponseType, CoreGenderClaim, CoreIdToken,
-        CoreJsonWebKey, CoreJweContentEncryptionAlgorithm,
-        CoreProviderMetadata, CoreRevocableToken, CoreRevocationErrorResponse,
-        CoreTokenIntrospectionResponse, CoreTokenResponse,
+        CoreJsonWebKey, CoreJweContentEncryptionAlgorithm, CoreProviderMetadata,
+        CoreRevocableToken, CoreRevocationErrorResponse, CoreTokenIntrospectionResponse,
+        CoreTokenResponse,
     },
     reqwest,
     reqwest::ClientBuilder,
-    ClaimsVerificationError, Client, ClientId, EmptyAdditionalClaims, EndpointMaybeSet, EndpointNotSet, EndpointSet,
-    IssuerUrl, Nonce, NonceVerifier, StandardErrorResponse,
+    ClaimsVerificationError, Client, ClientId, EmptyAdditionalClaims, EndpointMaybeSet,
+    EndpointNotSet, EndpointSet, IssuerUrl, Nonce, NonceVerifier, StandardErrorResponse,
 };
 
 use rocket::{
@@ -109,11 +106,12 @@ impl<'r> FromRequest<'r> for User {
             Ok(_) => Outcome::Success(User),
             Err(err) => {
                 rocket::error!("Token verification failed: {:?}", err);
-                //Outcome::Error((Status::Unauthorized, Self::Error::TokenVerificationError(err)))
-                Outcome::Success(User)
+                Outcome::Error((
+                    Status::Unauthorized,
+                    Self::Error::TokenVerificationError(err),
+                ))
             }
         }
-
     }
 }
 
@@ -140,7 +138,8 @@ pub(crate) async fn init_oidc() -> LocalClient {
 
     let issuer_url = IssuerUrl::new(
         env::var("OIDC_ISSUER_URL").expect("OIDC_ISSUER_URL environment variable is not set"),
-    ).expect("Invalid issuer URL");
+    )
+    .expect("Invalid issuer URL");
 
     let client_id = ClientId::new(
         env::var("OIDC_CLIENT_ID").expect("OIDC_CLIENT_ID environment variable is not set"),
