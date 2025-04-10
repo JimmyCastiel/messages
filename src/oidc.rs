@@ -7,7 +7,7 @@ use std::str::FromStr;
 use openidconnect::{
     core::{
         CoreAuthDisplay, CoreAuthPrompt, CoreErrorResponseType, CoreGenderClaim, CoreIdToken,
-        CoreIdTokenVerifier, CoreJsonWebKey, CoreJweContentEncryptionAlgorithm,
+        CoreJsonWebKey, CoreJweContentEncryptionAlgorithm,
         CoreProviderMetadata, CoreRevocableToken, CoreRevocationErrorResponse,
         CoreTokenIntrospectionResponse, CoreTokenResponse,
     },
@@ -63,55 +63,44 @@ impl<'r> FromRequest<'r> for User {
     type Error = UserError;
 
     async fn from_request(request: &'r Request<'_>) -> Outcome<Self, Self::Error> {
-        let headers = request.headers();
-        match headers.get_one("authorization") {
-            Some(bearer) => {
-                let oidc_client = request.rocket().state::<LocalClient>();
-                match oidc_client {
-                    Some(oidc_client) => {
-                        let split: Vec<&str> = bearer.split(' ').collect();
-                        if split.len() != 2 {
-                            error!("Header is incorrect");
-                            return Outcome::Error((Status::Unauthorized, Self::Error::Empty));
-                        }
-
-                        if split[0].to_lowercase() != "bearer" {
-                            error!("Authorization isn't bearer");
-                            return Outcome::Error((Status::Unauthorized, Self::Error::Empty));
-                        }
-
-                        let id_token: Result<CoreIdToken, _> = CoreIdToken::from_str(split[1]);
-                        match id_token {
-                            Err(_) => {
-                                error!("Token couldn't be parsed");
-                                Outcome::Error((Status::Unauthorized, Self::Error::Empty))
-                            }
-                            Ok(id_token) => {
-                                let id_token_verifier: CoreIdTokenVerifier =
-                                    oidc_client.id_token_verifier();
-
-                                let nonce_verifier: NoneNonce = NoneNonce::new();
-
-                                let claims = id_token.claims(&id_token_verifier, &nonce_verifier);
-
-                                match claims {
-                                    Ok(claims) => Outcome::Success(User {}),
-                                    Err(claims) => {
-                                        error!("Token is invalid : {:?}", claims);
-                                        Outcome::Error((Status::Unauthorized, Self::Error::Empty))
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    None => {
-                        error!("Couldn't retrieve the oidc client");
-                        Outcome::Error((Status::Unauthorized, Self::Error::Empty))
-                    }
-                }
-            }
+        let oidc_client = match request.rocket().state::<LocalClient>() {
+            Some(client) => client,
             None => {
-                error!("The authorization header is missing");
+                rocket::error!("Couldn't retrieve the oidc client");
+                return Outcome::Error((Status::Unauthorized, Self::Error::Empty));
+            }
+        };
+
+        let headers = request.headers();
+        let bearer = match headers.get_one("authorization") {
+            Some(bearer) => bearer,
+            None => {
+                rocket::error!("The authorization header is missing");
+                return Outcome::Error((Status::Unauthorized, Self::Error::Empty));
+            }
+        };
+
+        let split: Vec<&str> = bearer.split(' ').collect();
+        if split.len() != 2 || split[0].to_lowercase() != "bearer" {
+            rocket::error!("Invalid authorization header format");
+            return Outcome::Error((Status::Unauthorized, Self::Error::Empty));
+        }
+
+        let id_token = match CoreIdToken::from_str(split[1]) {
+            Ok(token) => token,
+            Err(_) => {
+                rocket::error!("Token couldn't be parsed");
+                return Outcome::Error((Status::Unauthorized, Self::Error::Empty));
+            }
+        };
+
+        let id_token_verifier = oidc_client.id_token_verifier();
+        let nonce_verifier = NoneNonce::new();
+
+        match id_token.claims(&id_token_verifier, &nonce_verifier) {
+            Ok(_) => Outcome::Success(User {}),
+            Err(claims) => {
+                rocket::error!("Token is invalid: {:?}", claims);
                 Outcome::Error((Status::Unauthorized, Self::Error::Empty))
             }
         }

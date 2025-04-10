@@ -41,7 +41,7 @@ async fn send_message(
     message: Json<Message>,
     state: &State<FutureProducer>,
 ) -> (Status, Json<String>) {
-    info!("{:?}", message);
+    rocket::info!("{:?}", message);
     let message_id: String = uuid7().to_string();
     // TODO implement checks
     let m: String = to_string(&message.into_inner()).unwrap();
@@ -65,7 +65,7 @@ async fn send_message(
 
 #[get("/<message_id>")]
 async fn get_message(_user: User, message_id: &str) -> Json<Message> {
-    info!("message with id {} was requested", message_id);
+    rocket::info!("message with id {} was requested", message_id);
     // TODO function's body
     Json(Message {
         source: "".to_string(),
