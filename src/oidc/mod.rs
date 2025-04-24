@@ -1,5 +1,7 @@
 use thiserror::Error;
 
+use tokio::task::{spawn_blocking, JoinError};
+
 use std::{env, str::FromStr};
 
 use openidconnect::{
@@ -59,6 +61,8 @@ pub(crate) enum UserError {
     TokenParseError,
     #[error("Token verification failed: {0}")]
     TokenVerificationError(#[from] ClaimsVerificationError),
+    #[error("Token verification thread failed: {0}")]
+    TokenVerificationThreadError(#[from] JoinError),
 }
 
 #[derive(Debug)]
@@ -99,19 +103,40 @@ impl<'r> FromRequest<'r> for User {
             }
         };
 
-        let id_token_verifier = oidc_client.id_token_verifier();
-        let nonce_verifier = NoneNonce::new();
+        spawn_blocking(move || {
+            let id_token_verifier = oidc_client.id_token_verifier();
+            let nonce_verifier = NoneNonce::new();
 
-        match id_token.claims(&id_token_verifier, &nonce_verifier) {
-            Ok(_) => Outcome::Success(User),
-            Err(err) => {
-                rocket::error!("Token verification failed: {:?}", err);
-                Outcome::Error((
-                    Status::Unauthorized,
-                    Self::Error::TokenVerificationError(err),
-                ))
+            match id_token.claims(&id_token_verifier, &nonce_verifier) {
+                Ok(_) => Outcome::Success(User),
+                Err(err) => {
+                    rocket::error!("Token verification failed: {:?}", err);
+                    Outcome::Error((
+                        Status::Unauthorized,
+                        Self::Error::TokenVerificationError(err),
+                    ))
+                }
             }
-        }
+        })
+        .await
+        .map_err(|err: JoinError| -> Outcome<User, Self::Error> {
+            Outcome::Error((
+                Status::Unauthorized,
+                Self::Error::TokenVerificationThreadError(err),
+            ))
+        })
+        .unwrap()
+
+        //match result {
+        //    Ok(r) => r,
+        //    Err(err) => {
+        //        rocket::error!("Token verification thread failed: {:?}", err);
+        //        Outcome::Error((
+        //            Status::Unauthorized,
+        //            Self::Error::TokenVerificationThreadError(err),
+        //        ))
+        //    }
+        //}
     }
 }
 
