@@ -4,11 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+thiserror = "2.0.12"
+tokio = "1.44.2"
 async-trait = "0.1.88"
-openidconnect = "4.0.0"
-rdkafka = "0.37.0"
 rocket = { version = "0.5.1", features = [ "json" ] }
 rocket_okapi = "0.9.0"
-thiserror = "2.0.12"
-tokio = "1.44.1"
+openidconnect = "4.0.0"
+rdkafka = "0.37.0"
 uuid7 = "1.1.0"
