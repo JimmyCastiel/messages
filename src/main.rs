@@ -1,17 +1,9 @@
-mod oidc;
 mod kafka;
+mod oidc;
 
 use crate::{
-    kafka::{
-        Producer,
-        KafkaProducer,
-        KafkaFutureProducer
-    },
-    oidc::{
-        init_oidc,
-        LocalOidcClient,
-        User
-    }
+    kafka::{KafkaFutureProducer, KafkaProducer, Producer},
+    oidc::{init_oidc, LocalOidcClient, User},
 };
 
 #[macro_use]
@@ -38,7 +30,7 @@ struct Message {
 
 type Messages = LinkedList<Message>;
 
-#[post("/", data = "<message>")]
+#[post("/", format = "application/json", data = "<message>")]
 async fn send_message(
     _user: User,
     message: Json<Message>,
@@ -49,10 +41,7 @@ async fn send_message(
     // TODO implement checks
     let m: String = to_string(&message.into_inner()).unwrap();
 
-    let response = kafka_client
-        .inner()
-        .send_message(&message_id, &m)
-        .await;
+    let response = kafka_client.inner().send_message(&message_id, &m).await;
 
     match response {
         Ok(_) => (Status::Accepted, Json(message_id)),
@@ -81,8 +70,8 @@ async fn list_messages(_user: User) -> Json<Messages> {
 async fn rocket() -> _ {
     let oidc_client: LocalOidcClient = init_oidc().await;
 
-    let producer: KafkaProducer<KafkaFutureProducer> = KafkaProducer::<KafkaFutureProducer>::new()
-        .expect("Couldn't create Kafka producer");
+    let producer: KafkaProducer<KafkaFutureProducer> =
+        KafkaProducer::<KafkaFutureProducer>::new().expect("Couldn't create Kafka producer");
 
     rocket::build()
         .mount("/", routes![list_messages, get_message, send_message])
